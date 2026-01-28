@@ -1,0 +1,3 @@
+[submodule "mcp"]
+	path = mcp
+	url = https://github.com/heidrian-eth/n8n-api-mcp.git
