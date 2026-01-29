@@ -1,0 +1,44 @@
+#!/bin/bash
+# Search nodes using FTS5 full-text search
+# Usage: search_nodes <keyword> [limit]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found. Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+QUERY="${1:-}"
+LIMIT="${2:-20}"
+
+if [ -z "$QUERY" ]; then
+    echo "Usage: search_nodes <keyword> [limit]"
+    echo ""
+    echo "Examples:"
+    echo "  search_nodes gmail"
+    echo "  search_nodes \"http request\" 10"
+    echo "  search_nodes slack 5"
+    exit 1
+fi
+
+sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    node_type,
+    display_name,
+    category,
+    CASE WHEN is_ai_tool = 1 THEN 'Yes' ELSE 'No' END as ai_capable,
+    CASE WHEN is_trigger = 1 THEN 'Yes' ELSE 'No' END as is_trigger
+FROM nodes
+WHERE node_type IN (
+    SELECT node_type FROM nodes_fts
+    WHERE nodes_fts MATCH '$QUERY'
+)
+ORDER BY
+    CASE WHEN is_community = 0 THEN 0 ELSE 1 END,
+    display_name
+LIMIT $LIMIT;
+SQL

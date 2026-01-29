@@ -1,3 +1,6 @@
 [submodule "mcp"]
 	path = mcp
 	url = https://github.com/heidrian-eth/n8n-api-mcp.git
+[submodule "n8n-mcp"]
+	path = n8n-mcp
+	url = https://github.com/czlonkowski/n8n-mcp.git

@@ -1,0 +1,226 @@
+#!/bin/bash
+# Main entry point for n8n nodes database queries
+# Usage: query_nodes_db <command> [args]
+# Commands: search, node, templates, configs, stats
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+# Check if database exists
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found at $DB_PATH"
+    echo "Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+show_help() {
+    cat << 'EOF'
+n8n Nodes Database Query Tool
+
+Usage: query_nodes_db <command> [args]
+
+Commands:
+  search <keyword> [limit]     Search nodes using full-text search (default limit: 20)
+  node <node_type>             Get detailed information about a specific node
+  templates <keyword> [limit]  Search workflow templates (default limit: 10)
+  configs <node_type> [limit]  Get real-world configurations for a node (default limit: 5)
+  stats                        Show database statistics
+  categories                   List all node categories
+  ai-nodes [limit]             List AI-capable nodes (default limit: 20)
+  triggers [limit]             List trigger nodes (default limit: 20)
+
+Examples:
+  query_nodes_db search "gmail"
+  query_nodes_db node "n8n-nodes-base.gmail"
+  query_nodes_db templates "slack webhook"
+  query_nodes_db configs "n8n-nodes-base.httpRequest" 3
+  query_nodes_db stats
+  query_nodes_db ai-nodes 10
+
+EOF
+}
+
+case "$1" in
+    search)
+        if [ -z "$2" ]; then
+            echo "Usage: query_nodes_db search <keyword> [limit]"
+            exit 1
+        fi
+        QUERY="$2"
+        LIMIT="${3:-20}"
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    node_type,
+    display_name,
+    category,
+    CASE WHEN is_ai_tool = 1 THEN 'Yes' ELSE 'No' END as ai_capable,
+    CASE WHEN is_trigger = 1 THEN 'Yes' ELSE 'No' END as is_trigger
+FROM nodes
+WHERE node_type IN (
+    SELECT node_type FROM nodes_fts
+    WHERE nodes_fts MATCH '$QUERY'
+)
+ORDER BY
+    CASE WHEN is_community = 0 THEN 0 ELSE 1 END,
+    display_name
+LIMIT $LIMIT;
+SQL
+        ;;
+
+    node)
+        if [ -z "$2" ]; then
+            echo "Usage: query_nodes_db node <node_type>"
+            exit 1
+        fi
+        NODE_TYPE="$2"
+        sqlite3 "$DB_PATH" <<SQL
+.mode line
+SELECT
+    node_type,
+    display_name,
+    description,
+    category,
+    package_name,
+    CASE WHEN is_ai_tool = 1 THEN 'Yes' ELSE 'No' END as ai_capable,
+    CASE WHEN is_trigger = 1 THEN 'Yes' ELSE 'No' END as is_trigger,
+    CASE WHEN is_webhook = 1 THEN 'Yes' ELSE 'No' END as is_webhook,
+    CASE WHEN is_community = 1 THEN 'Yes' ELSE 'No' END as is_community,
+    version,
+    credentials_required,
+    ai_documentation_summary
+FROM nodes
+WHERE node_type = '$NODE_TYPE';
+SQL
+        ;;
+
+    templates)
+        if [ -z "$2" ]; then
+            echo "Usage: query_nodes_db templates <keyword> [limit]"
+            exit 1
+        fi
+        QUERY="$2"
+        LIMIT="${3:-10}"
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    id,
+    name,
+    author_name,
+    views,
+    SUBSTR(description, 1, 80) as description_preview
+FROM templates
+WHERE id IN (
+    SELECT rowid FROM templates_fts
+    WHERE templates_fts MATCH '$QUERY'
+)
+ORDER BY views DESC
+LIMIT $LIMIT;
+SQL
+        ;;
+
+    configs)
+        if [ -z "$2" ]; then
+            echo "Usage: query_nodes_db configs <node_type> [limit]"
+            exit 1
+        fi
+        NODE_TYPE="$2"
+        LIMIT="${3:-5}"
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    c.rank,
+    c.template_name,
+    c.template_views as views,
+    c.complexity,
+    CASE WHEN c.has_credentials = 1 THEN 'Yes' ELSE 'No' END as has_auth,
+    CASE WHEN c.has_expressions = 1 THEN 'Yes' ELSE 'No' END as has_expr
+FROM template_node_configs c
+WHERE c.node_type = '$NODE_TYPE'
+ORDER BY c.rank ASC
+LIMIT $LIMIT;
+SQL
+        echo ""
+        echo "To get full config JSON, use: query_nodes_db config-json <node_type> <rank>"
+        ;;
+
+    config-json)
+        if [ -z "$2" ] || [ -z "$3" ]; then
+            echo "Usage: query_nodes_db config-json <node_type> <rank>"
+            exit 1
+        fi
+        NODE_TYPE="$2"
+        RANK="$3"
+        sqlite3 "$DB_PATH" <<SQL
+SELECT parameters_json
+FROM template_node_configs
+WHERE node_type = '$NODE_TYPE' AND rank = $RANK;
+SQL
+        ;;
+
+    stats)
+        sqlite3 "$DB_PATH" <<SQL
+.mode line
+SELECT
+    (SELECT COUNT(*) FROM nodes) as total_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_community = 0) as official_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_community = 1) as community_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_ai_tool = 1) as ai_capable_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_trigger = 1) as trigger_nodes,
+    (SELECT COUNT(*) FROM templates) as total_templates,
+    (SELECT COUNT(*) FROM template_node_configs) as total_configs;
+SQL
+        ;;
+
+    categories)
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    category,
+    COUNT(*) as node_count
+FROM nodes
+WHERE category IS NOT NULL
+GROUP BY category
+ORDER BY node_count DESC;
+SQL
+        ;;
+
+    ai-nodes)
+        LIMIT="${2:-20}"
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    node_type,
+    display_name,
+    category
+FROM nodes
+WHERE is_ai_tool = 1
+ORDER BY
+    CASE WHEN is_community = 0 THEN 0 ELSE 1 END,
+    display_name
+LIMIT $LIMIT;
+SQL
+        ;;
+
+    triggers)
+        LIMIT="${2:-20}"
+        sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    node_type,
+    display_name,
+    category
+FROM nodes
+WHERE is_trigger = 1
+ORDER BY
+    CASE WHEN is_community = 0 THEN 0 ELSE 1 END,
+    display_name
+LIMIT $LIMIT;
+SQL
+        ;;
+
+    help|--help|-h)
+        show_help
+        ;;
+
+    *)
+        show_help
+        exit 1
+        ;;
+esac

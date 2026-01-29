@@ -1,0 +1,41 @@
+#!/bin/bash
+# Show database statistics
+# Usage: db_stats
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found. Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+echo "=== n8n Nodes Database Statistics ==="
+echo ""
+
+sqlite3 "$DB_PATH" <<SQL
+.mode line
+SELECT
+    (SELECT COUNT(*) FROM nodes) as total_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_community = 0) as official_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_community = 1) as community_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_ai_tool = 1) as ai_capable_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_trigger = 1) as trigger_nodes,
+    (SELECT COUNT(*) FROM nodes WHERE is_webhook = 1) as webhook_nodes,
+    (SELECT COUNT(*) FROM templates) as total_templates,
+    (SELECT COUNT(*) FROM template_node_configs) as total_configs,
+    (SELECT COUNT(DISTINCT category) FROM nodes WHERE category IS NOT NULL) as categories;
+SQL
+
+echo ""
+echo "=== Top Categories ==="
+sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT category, COUNT(*) as count
+FROM nodes
+WHERE category IS NOT NULL
+GROUP BY category
+ORDER BY count DESC
+LIMIT 10;
+SQL

@@ -1,0 +1,42 @@
+#!/bin/bash
+# Get detailed information about a specific template
+# Usage: get_template <id>
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found. Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+TEMPLATE_ID="${1:-}"
+
+if [ -z "$TEMPLATE_ID" ]; then
+    echo "Usage: get_template <id>"
+    echo ""
+    echo "Find template IDs with: list_templates <keyword>"
+    exit 1
+fi
+
+sqlite3 "$DB_PATH" <<SQL
+.mode line
+SELECT
+    id,
+    workflow_id,
+    name,
+    description,
+    author_name,
+    author_username,
+    CASE WHEN author_verified = 1 THEN 'Yes' ELSE 'No' END as author_verified,
+    views,
+    nodes_used,
+    categories,
+    url,
+    created_at,
+    updated_at
+FROM templates
+WHERE id = $TEMPLATE_ID;
+SQL
