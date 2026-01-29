@@ -1,0 +1,45 @@
+#!/bin/bash
+# Search workflow templates
+# Usage: list_templates <keyword> [limit]
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found. Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+QUERY="${1:-}"
+LIMIT="${2:-10}"
+
+if [ -z "$QUERY" ]; then
+    echo "Usage: list_templates <keyword> [limit]"
+    echo ""
+    echo "Examples:"
+    echo "  list_templates \"email automation\""
+    echo "  list_templates slack 20"
+    echo "  list_templates \"google sheets\""
+    exit 1
+fi
+
+sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT
+    id,
+    name,
+    author_name,
+    views,
+    SUBSTR(description, 1, 80) as description_preview
+FROM templates
+WHERE id IN (
+    SELECT rowid FROM templates_fts
+    WHERE templates_fts MATCH '$QUERY'
+)
+ORDER BY views DESC
+LIMIT $LIMIT;
+SQL
+
+echo ""
+echo "Use 'get_template <id>' to see full template details."

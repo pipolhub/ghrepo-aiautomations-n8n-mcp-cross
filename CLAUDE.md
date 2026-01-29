@@ -4,9 +4,10 @@
 
 This repository provides a template for managing n8n workflows via the n8n API through MCP.
 
-## Workflow Building
+## Skills
 
-For building workflows programmatically via the n8n API (using the MCP), see **[.claude/skills/n8n-workflow-builder/SKILL.md](.claude/skills/n8n-workflow-builder/SKILL.md)**.
+- **[n8n-workflow-builder](.claude/skills/n8n-workflow-builder/SKILL.md)** - Build workflows programmatically via MCP
+- **[n8n-nodes-db](.claude/skills/n8n-nodes-db/SKILL.md)** - Query 800+ nodes, 2,700+ templates, and real-world configurations
 
 ## MCP Server
 

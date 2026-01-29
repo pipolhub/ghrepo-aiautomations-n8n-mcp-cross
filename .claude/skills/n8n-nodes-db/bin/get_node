@@ -1,0 +1,90 @@
+#!/bin/bash
+# Get detailed information about a specific node
+# Usage: get_node <node_type>
+#
+# Note: Database stores node types without 'n8n-' prefix
+# Examples in database: nodes-base.gmail, nodes-langchain.agent
+# This script handles both formats
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DB_PATH="$SCRIPT_DIR/../../../../n8n-mcp/data/nodes.db"
+
+if [ ! -f "$DB_PATH" ]; then
+    echo "Error: Database not found. Run: git submodule update --init --recursive"
+    exit 1
+fi
+
+NODE_TYPE="${1:-}"
+
+if [ -z "$NODE_TYPE" ]; then
+    echo "Usage: get_node <node_type>"
+    echo ""
+    echo "Examples:"
+    echo "  get_node nodes-base.gmail"
+    echo "  get_node nodes-base.httpRequest"
+    echo "  get_node nodes-langchain.agent"
+    echo ""
+    echo "Note: Database uses 'nodes-base.' prefix (not 'n8n-nodes-base.')"
+    exit 1
+fi
+
+# Try multiple formats to find the node
+find_node() {
+    local type="$1"
+    sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM nodes WHERE node_type = '$type';"
+}
+
+FOUND_TYPE=""
+
+# Try exact match first
+if [ "$(find_node "$NODE_TYPE")" != "0" ]; then
+    FOUND_TYPE="$NODE_TYPE"
+# Try stripping 'n8n-' prefix
+elif [ "$(find_node "${NODE_TYPE#n8n-}")" != "0" ]; then
+    FOUND_TYPE="${NODE_TYPE#n8n-}"
+# Try stripping '@n8n/' prefix
+elif [ "$(find_node "${NODE_TYPE#@n8n/n8n-}")" != "0" ]; then
+    FOUND_TYPE="${NODE_TYPE#@n8n/n8n-}"
+fi
+
+if [ -z "$FOUND_TYPE" ]; then
+    # Try partial match
+    echo "No exact match for '$NODE_TYPE'. Searching..."
+    echo ""
+    # Strip common prefixes for better matching
+    SEARCH_TERM="${NODE_TYPE#n8n-}"
+    SEARCH_TERM="${SEARCH_TERM#@n8n/n8n-}"
+    sqlite3 -header -column "$DB_PATH" <<SQL
+SELECT node_type, display_name, category
+FROM nodes
+WHERE node_type LIKE '%$SEARCH_TERM%'
+   OR display_name LIKE '%$SEARCH_TERM%'
+LIMIT 10;
+SQL
+    exit 0
+fi
+
+# Add note about the actual format
+echo "# Note: For workflow JSON, use 'n8n-$FOUND_TYPE'"
+echo ""
+
+sqlite3 "$DB_PATH" <<SQL
+.mode line
+SELECT
+    node_type,
+    display_name,
+    description,
+    category,
+    package_name,
+    CASE WHEN is_ai_tool = 1 THEN 'Yes' ELSE 'No' END as ai_capable,
+    CASE WHEN is_trigger = 1 THEN 'Yes' ELSE 'No' END as is_trigger,
+    CASE WHEN is_webhook = 1 THEN 'Yes' ELSE 'No' END as is_webhook,
+    CASE WHEN is_community = 1 THEN 'Yes' ELSE 'No' END as is_community,
+    version,
+    credentials_required,
+    ai_documentation_summary
+FROM nodes
+WHERE node_type = '$FOUND_TYPE';
+SQL
