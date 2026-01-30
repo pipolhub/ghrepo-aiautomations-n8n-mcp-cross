@@ -472,6 +472,96 @@ execute_api_call({
 }
 ```
 
+### Pattern 4: Loop Over Items with Static Data Collector
+
+**Problem:** When multiple items flow through a workflow, nodes process all items together. Sometimes you need to:
+1. Process each item **in isolation** (one at a time)
+2. Collect results from each iteration
+3. Continue with **all results batched together** after the loop completes
+
+**Solution:** Use `splitInBatches` (Loop Over Items) combined with workflow static data to accumulate results.
+
+**Flow Structure:**
+```
+Input Items → Loop Over Items ──[loop branch]──→ Process Item → Collect Result ─┐
+                    ↑                                                            │
+                    └────────────────────────────────────────────────────────────┘
+                    │
+              [done branch]
+                    ↓
+             Get All Results → Continue with batched data...
+```
+
+**Nodes:**
+
+1. **Loop Over Items** (`splitInBatches`):
+```json
+{
+  "name": "Loop Over Items",
+  "type": "n8n-nodes-base.splitInBatches",
+  "typeVersion": 3,
+  "parameters": {"options": {}},
+  "position": [400, 300]
+}
+```
+
+2. **Collect Result** (Code node inside loop - stores each result):
+```json
+{
+  "name": "Collect Result",
+  "type": "n8n-nodes-base.code",
+  "typeVersion": 2,
+  "parameters": {
+    "jsCode": "// Store result in workflow static data\nconst staticData = $getWorkflowStaticData('global');\nstaticData.collectedItems = staticData.collectedItems || [];\n\nconst item = $input.first().json;\nstaticData.collectedItems.push(item);\n\nreturn $input.all();"
+  }
+}
+```
+
+3. **Get All Results** (Code node on done branch - retrieves all collected items):
+```json
+{
+  "name": "Get All Results",
+  "type": "n8n-nodes-base.code",
+  "typeVersion": 2,
+  "parameters": {
+    "jsCode": "// Retrieve all collected items from static data\nconst staticData = $getWorkflowStaticData('global');\nconst items = staticData.collectedItems || [];\n\n// IMPORTANT: Clear for next execution\nstaticData.collectedItems = [];\n\n// Return as n8n items\nreturn items.map(item => ({ json: item }));"
+  }
+}
+```
+
+**Connections:**
+```json
+{
+  "Loop Over Items": {
+    "main": [
+      [{"node": "Get All Results", "type": "main", "index": 0}],
+      [{"node": "Process Item", "type": "main", "index": 0}]
+    ]
+  },
+  "Process Item": {
+    "main": [[{"node": "Collect Result", "type": "main", "index": 0}]]
+  },
+  "Collect Result": {
+    "main": [[{"node": "Loop Over Items", "type": "main", "index": 0}]]
+  },
+  "Get All Results": {
+    "main": [[{"node": "Next Node", "type": "main", "index": 0}]]
+  }
+}
+```
+
+**Key Points:**
+- `splitInBatches` output 0 = "done" branch (fires when loop completes)
+- `splitInBatches` output 1 = "loop" branch (fires for each item)
+- `$getWorkflowStaticData('global')` persists across loop iterations within same execution
+- **Always clear static data** after retrieval to prevent data leakage between workflow executions
+- This avoids sub-workflows (preserves execution quota) while achieving isolated processing
+
+**When to Use:**
+- Processing files that require isolated API calls (folder creation, file moves)
+- Building data structures iteratively where each step depends on the previous
+- Any scenario where items must be processed one-by-one but results collected together
+
 See: [WORKFLOW_PATTERNS.md](WORKFLOW_PATTERNS.md) for more patterns
 
 ---
