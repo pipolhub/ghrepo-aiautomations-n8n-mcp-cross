@@ -13,6 +13,10 @@ Common architectural patterns for building n8n workflows.
 | AI Agent with Tools | Conversational AI, multi-step reasoning |
 | Database Sync | ETL, data synchronization |
 | Error Handler | Need separate error handling flow |
+| Branching Logic | Different processing based on conditions |
+| Parallel Processing | Independent operations, aggregation |
+| Batch Processing | Large datasets, rate limiting |
+| Loop with Static Data Collector | Process items in isolation, collect results for batch continuation |
 
 ---
 
@@ -530,6 +534,132 @@ Add HTTP tool and memory:
   }
 }
 ```
+
+---
+
+## Pattern 8: Loop with Static Data Collector
+
+**Use case:** Process items in isolation, collect results, then continue with batched data
+
+**Problem:** When multiple items flow through a workflow:
+- Nodes process all items together by default
+- Some operations need each item processed independently (e.g., folder creation, API calls with dependencies)
+- After independent processing, you need all results together for the next stage
+
+**Solution:** Use `splitInBatches` with workflow static data to accumulate results across iterations.
+
+### Flow Structure
+
+```
+Input (N items) → Loop Over Items ──[loop branch]──→ Process → Collect ─┐
+                       ↑                                                 │
+                       └─────────────────────────────────────────────────┘
+                       │
+                 [done branch]
+                       ↓
+                Get All Results (N items) → Continue...
+```
+
+### Implementation
+
+```json
+{
+  "name": "Loop with Collector",
+  "nodes": [
+    {
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [400, 300],
+      "parameters": {"options": {}}
+    },
+    {
+      "name": "Process Item",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [620, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.example.com/process",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{"name": "id", "value": "={{ $json.id }}"}]
+        }
+      }
+    },
+    {
+      "name": "Collect Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 400],
+      "parameters": {
+        "jsCode": "// Accumulate results in workflow static data\nconst staticData = $getWorkflowStaticData('global');\nstaticData.results = staticData.results || [];\n\nconst result = $input.first().json;\nstaticData.results.push({\n  id: result.id,\n  status: result.status,\n  processedAt: new Date().toISOString()\n});\n\nreturn $input.all();"
+      }
+    },
+    {
+      "name": "Get All Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [620, 200],
+      "parameters": {
+        "jsCode": "// Retrieve all collected results\nconst staticData = $getWorkflowStaticData('global');\nconst results = staticData.results || [];\n\n// CRITICAL: Clear for next execution\nstaticData.results = [];\n\n// Return as n8n items\nreturn results.map(item => ({ json: item }));"
+      }
+    },
+    {
+      "name": "Send Summary",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [840, 200],
+      "parameters": {
+        "channel": "#notifications",
+        "text": "=Processed {{ $json.length }} items"
+      }
+    }
+  ],
+  "connections": {
+    "Loop Over Items": {
+      "main": [
+        [{"node": "Get All Results", "type": "main", "index": 0}],
+        [{"node": "Process Item", "type": "main", "index": 0}]
+      ]
+    },
+    "Process Item": {
+      "main": [[{"node": "Collect Result", "type": "main", "index": 0}]]
+    },
+    "Collect Result": {
+      "main": [[{"node": "Loop Over Items", "type": "main", "index": 0}]]
+    },
+    "Get All Results": {
+      "main": [[{"node": "Send Summary", "type": "main", "index": 0}]]
+    }
+  }
+}
+```
+
+### Key Points
+
+| Aspect | Detail |
+|--------|--------|
+| **splitInBatches outputs** | Output 0 = "done" (fires once when complete), Output 1 = "loop" (fires for each item) |
+| **Static data scope** | `$getWorkflowStaticData('global')` persists across loop iterations within the same execution |
+| **Always clear data** | Clear static data after retrieval to prevent leakage between workflow executions |
+| **Avoids sub-workflows** | This pattern preserves execution quota while achieving isolated processing |
+
+### When to Use
+
+- **File organization:** Creating folder structures where each folder depends on the previous
+- **Sequential API calls:** Operations that must complete before the next can determine its target
+- **Data aggregation:** Building a summary from individually processed items
+- **Resource creation:** Creating resources (folders, records) then collecting their IDs/URLs
+
+### vs. Pattern 7 (Batch Processing)
+
+| Pattern 7 (Batch) | Pattern 8 (Loop + Collector) |
+|-------------------|------------------------------|
+| Splits large datasets into smaller chunks | Processes items one-by-one |
+| For rate limiting parallel operations | For sequential dependent operations |
+| Results flow naturally | Results must be explicitly collected |
+| Simple loop back to batch node | Loop back + collector + retriever nodes |
 
 ---
 
